@@ -10,7 +10,7 @@
     "build": "vue-tsc --noEmit && vite build && electron-builder",
     "preview": "vite preview",
     "typecheck": "vue-tsc --noEmit",
-    "test": "tsx --test tests/**/*.test.ts"
+    "test": "node --import tsx --test \"tests/**/*.test.ts\""
   },
   "dependencies": {
     "@element-plus/icons-vue": "^2.3.2",
