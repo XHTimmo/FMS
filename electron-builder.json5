@@ -10,8 +10,11 @@
     "package.json"
   ],
   "mac": {
-    "target": ["dmg", "zip"],
+    "target": ["zip", "dmg"],
     "artifactName": "${productName}-${version}-mac-${arch}.${ext}"
+  },
+  "dmg": {
+    "writeUpdateInfo": false
   },
   "win": {
     "target": ["nsis"],

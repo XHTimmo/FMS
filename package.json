@@ -7,7 +7,7 @@
   "main": "dist-electron/main/index.js",
   "scripts": {
     "dev": "vite",
-    "build": "vue-tsc --noEmit && vite build && electron-builder",
+    "build": "vue-tsc --noEmit && vite build && USE_HARD_LINKS=false electron-builder",
     "preview": "vite preview",
     "typecheck": "vue-tsc --noEmit",
     "test": "node scripts/run-tests.js"
