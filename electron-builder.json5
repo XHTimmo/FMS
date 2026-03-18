@@ -1,0 +1,24 @@
+{
+  "appId": "com.timmo.studio-financial",
+  "productName": "StudioFinancialSystem",
+  "directories": {
+    "output": "release/${version}"
+  },
+  "files": [
+    "dist/**/*",
+    "dist-electron/**/*",
+    "package.json"
+  ],
+  "mac": {
+    "target": ["dmg", "zip"],
+    "artifactName": "${productName}-${version}-mac-${arch}.${ext}"
+  },
+  "win": {
+    "target": ["nsis"],
+    "artifactName": "${productName}-${version}-win-${arch}.${ext}"
+  },
+  "linux": {
+    "target": ["AppImage"],
+    "artifactName": "${productName}-${version}-linux-${arch}.${ext}"
+  }
+}
