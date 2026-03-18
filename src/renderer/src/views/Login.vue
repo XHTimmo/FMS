@@ -18,15 +18,25 @@
 <script setup lang="ts">
 import { reactive } from 'vue';
 import { useRouter } from 'vue-router';
+import { ElMessage } from 'element-plus';
 
 const router = useRouter();
 const form = reactive({ username: '', password: '' });
 
 const handleLogin = () => {
-  // TODO: Implement actual auth via IPC
   if (form.username === 'admin' && form.password === '123456') {
+    localStorage.setItem('auth_token', `${Date.now()}`);
+    localStorage.setItem('auth_user', JSON.stringify({
+      id: 1,
+      name: 'admin',
+      role: 'admin',
+      ip: '127.0.0.1'
+    }));
     router.push('/');
+    ElMessage.success('登录成功');
+    return;
   }
+  ElMessage.error('用户名或密码错误');
 };
 </script>
 

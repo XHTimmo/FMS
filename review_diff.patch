@@ -1,0 +1,1406 @@
+diff --git a/src/main/ipc/dashboard.ts b/src/main/ipc/dashboard.ts
+index 24b83cf..fd40892 100644
+--- a/src/main/ipc/dashboard.ts
++++ b/src/main/ipc/dashboard.ts
+@@ -1,65 +1,462 @@
+-import { ipcMain } from 'electron';
++import { app, BrowserWindow, dialog, ipcMain } from 'electron';
+ import { getDB } from '../database';
+ import dayjs from 'dayjs';
++import { join } from 'path';
++import fs from 'fs-extra';
++import ExcelJS from 'exceljs';
++
++type PeriodType = 'year' | 'quarter' | 'month' | 'custom';
++
++interface DashboardQuery {
++  periodType?: PeriodType;
++  year?: number;
++  quarter?: number;
++  month?: number;
++  startDate?: string;
++  endDate?: string;
++}
++
++function getPeriodRange(query: DashboardQuery) {
++  const now = dayjs();
++  const periodType = query.periodType || 'month';
++  const year = query.year || now.year();
++  const quarter = query.quarter || Math.ceil((now.month() + 1) / 3);
++  const month = query.month || now.month() + 1;
++
++  if (periodType === 'year') {
++    const start = dayjs(`${year}-01-01`).startOf('day');
++    const end = dayjs(`${year}-12-31`).endOf('day');
++    return { start, end, periodType, year, quarter, month };
++  }
++
++  if (periodType === 'quarter') {
++    const startMonth = (quarter - 1) * 3 + 1;
++    const start = dayjs(`${year}-${String(startMonth).padStart(2, '0')}-01`).startOf('month');
++    const end = start.add(2, 'month').endOf('month');
++    return { start, end, periodType, year, quarter, month };
++  }
++
++  if (periodType === 'custom' && query.startDate && query.endDate) {
++    const start = dayjs(query.startDate).startOf('day');
++    const end = dayjs(query.endDate).endOf('day');
++    return { start, end, periodType, year, quarter, month };
++  }
++
++  const start = dayjs(`${year}-${String(month).padStart(2, '0')}-01`).startOf('month');
++  const end = start.endOf('month');
++  return { start, end, periodType: 'month' as PeriodType, year, quarter, month };
++}
++
++export function generateReportHtml(startDate: string, endDate: string, stats: any, chartImages: any, details: any[]) {
++  return `
++    <!DOCTYPE html>
++    <html>
++    <head>
++      <meta charset="UTF-8">
++      <title>财务报表</title>
++      <style>
++        body { font-family: "Helvetica Neue", Helvetica, "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", Arial, sans-serif; color: #333; margin: 0; padding: 20px; }
++        h1, h2 { text-align: center; color: #2c3e50; }
++        .summary { display: flex; justify-content: space-around; margin-bottom: 30px; background: #f8f9fa; padding: 20px; border-radius: 8px; }
++        .summary-item { text-align: center; }
++        .summary-item .label { font-size: 14px; color: #6c757d; }
++        .summary-item .value { font-size: 24px; font-weight: bold; margin-top: 8px; }
++        .value.income { color: #67C23A; }
++        .value.expense { color: #F56C6C; }
++        .chart-container { text-align: center; margin-bottom: 30px; page-break-inside: avoid; }
++        .chart-container img { max-width: 100%; height: auto; border: 1px solid #ebeef5; border-radius: 4px; padding: 10px; box-shadow: 0 2px 12px 0 rgba(0,0,0,.1); }
++        table { width: 100%; border-collapse: collapse; margin-top: 20px; font-size: 14px; }
++        th, td { border: 1px solid #ebeef5; padding: 12px 8px; text-align: left; }
++        th { background-color: #f5f7fa; font-weight: bold; color: #909399; }
++        tr:nth-child(even) { background-color: #fafafa; }
++        .text-right { text-align: right; }
++        .text-center { text-align: center; }
++        .page-break { page-break-before: always; }
++        .tag { padding: 4px 8px; border-radius: 4px; font-size: 12px; color: #fff; }
++        .tag.income { background-color: #67C23A; }
++        .tag.expense { background-color: #F56C6C; }
++      </style>
++    </head>
++    <body>
++      <h1>财务报表 (${startDate} 至 ${endDate})</h1>
++      
++      <div class="summary">
++        <div class="summary-item">
++          <div class="label">总资产</div>
++          <div class="value">¥ ${stats.totalAssets.toFixed(2)}</div>
++        </div>
++        <div class="summary-item">
++          <div class="label">总收入</div>
++          <div class="value income">¥ ${stats.totalIncome.toFixed(2)}</div>
++        </div>
++        <div class="summary-item">
++          <div class="label">总支出</div>
++          <div class="value expense">¥ ${stats.totalExpense.toFixed(2)}</div>
++        </div>
++        <div class="summary-item">
++          <div class="label">净收支</div>
++          <div class="value ${stats.netIncome >= 0 ? 'income' : 'expense'}">¥ ${stats.netIncome.toFixed(2)}</div>
++        </div>
++      </div>
++
++      <div class="chart-container">
++        <h2>收支趋势</h2>
++        ${chartImages.trend ? `<img src="${chartImages.trend}" />` : ''}
++      </div>
++
++      <div class="chart-container">
++        <h2>收入/支出构成</h2>
++        <div style="display: flex; justify-content: space-between;">
++          <div style="width: 48%;">${chartImages.incomePie ? `<img src="${chartImages.incomePie}" style="width: 100%;" />` : ''}</div>
++          <div style="width: 48%;">${chartImages.expensePie ? `<img src="${chartImages.expensePie}" style="width: 100%;" />` : ''}</div>
++        </div>
++      </div>
++
++      <div class="page-break"></div>
++      
++      <h2>收支明细</h2>
++      <table>
++        <thead>
++          <tr>
++            <th>日期</th>
++            <th class="text-center">类型</th>
++            <th>分类</th>
++            <th class="text-right">金额</th>
++            <th>说明</th>
++          </tr>
++        </thead>
++        <tbody>
++          ${details.map(row => `
++            <tr>
++              <td>${row.date}</td>
++              <td class="text-center"><span class="tag ${row.type}">${row.type === 'income' ? '收入' : '支出'}</span></td>
++              <td>${row.category_name || '-'}</td>
++              <td class="text-right">¥ ${Number(row.amount).toFixed(2)}</td>
++              <td>${row.description || '-'}</td>
++            </tr>
++          `).join('')}
++        </tbody>
++      </table>
++    </body>
++    </html>
++  `;
++}
+ 
+ export function registerDashboardHandlers() {
+   const db = getDB();
+ 
+-  ipcMain.handle('dashboard:stats', async () => {
+-    const now = dayjs();
+-    const startOfMonth = now.startOf('month').format('YYYY-MM-DD HH:mm:ss');
+-    const endOfMonth = now.endOf('month').format('YYYY-MM-DD HH:mm:ss');
++  ipcMain.handle('dashboard:stats', async (_, query: DashboardQuery = {}) => {
++    const range = getPeriodRange(query);
++    const startTime = range.start.format('YYYY-MM-DD HH:mm:ss');
++    const endTime = range.end.format('YYYY-MM-DD HH:mm:ss');
++    const startDate = range.start.format('YYYY-MM-DD');
++    const endDate = range.end.format('YYYY-MM-DD');
+ 
+-    // 1. Total Assets (Sum of all account balances)
+     const totalAssets = db.prepare('SELECT SUM(balance) as total FROM accounts').get() as { total: number };
+ 
+-    // 2. Monthly Income & Expense
+-    const monthlyStats = db.prepare(`
++    const periodStats = db.prepare(`
+       SELECT 
+         SUM(CASE WHEN type = 'income' THEN amount ELSE 0 END) as income,
+         SUM(CASE WHEN type = 'expense' THEN amount ELSE 0 END) as expense
+       FROM transactions 
+-      WHERE date BETWEEN ? AND ?
+-    `).get(startOfMonth, endOfMonth) as { income: number, expense: number };
+-
+-    // 3. Trend (Last 6 months)
+-    const trendData: { month: string, income: number, expense: number }[] = [];
+-    for (let i = 5; i >= 0; i--) {
+-      const monthStart = now.subtract(i, 'month').startOf('month').format('YYYY-MM-DD');
+-      const monthEnd = now.subtract(i, 'month').endOf('month').format('YYYY-MM-DD HH:mm:ss'); // Ensure full day coverage
+-      const monthLabel = now.subtract(i, 'month').format('YYYY-MM');
+-      
+-      const stat = db.prepare(`
+-        SELECT 
+-          SUM(CASE WHEN type = 'income' THEN amount ELSE 0 END) as income,
+-          SUM(CASE WHEN type = 'expense' THEN amount ELSE 0 END) as expense
+-        FROM transactions 
+-        WHERE date >= ? AND date <= ?
+-      `).get(monthStart, monthEnd) as { income: number, expense: number };
+-      
+-      trendData.push({
+-        month: monthLabel,
+-        income: stat.income || 0,
+-        expense: stat.expense || 0
+-      });
++      WHERE date(date) BETWEEN ? AND ? AND deleted_at IS NULL
++    `).get(startDate, endDate) as { income: number; expense: number };
++
++    const trend: { label: string; income: number; expense: number }[] = [];
++    if (range.periodType === 'year') {
++      for (let i = 0; i < 12; i++) {
++        const monthStart = dayjs(`${range.year}-${String(i + 1).padStart(2, '0')}-01`).startOf('month');
++        const monthEnd = monthStart.endOf('month');
++        const stat = db.prepare(`
++          SELECT 
++            SUM(CASE WHEN type = 'income' THEN amount ELSE 0 END) as income,
++            SUM(CASE WHEN type = 'expense' THEN amount ELSE 0 END) as expense
++          FROM transactions 
++          WHERE date(date) BETWEEN ? AND ? AND deleted_at IS NULL
++        `).get(monthStart.format('YYYY-MM-DD'), monthEnd.format('YYYY-MM-DD')) as { income: number; expense: number };
++        trend.push({
++          label: monthStart.format('MM月'),
++          income: stat.income || 0,
++          expense: stat.expense || 0
++        });
++      }
++    } else if (range.periodType === 'quarter') {
++      const startMonth = (range.quarter - 1) * 3 + 1;
++      for (let i = 0; i < 3; i++) {
++        const monthStart = dayjs(`${range.year}-${String(startMonth + i).padStart(2, '0')}-01`).startOf('month');
++        const monthEnd = monthStart.endOf('month');
++        const stat = db.prepare(`
++          SELECT 
++            SUM(CASE WHEN type = 'income' THEN amount ELSE 0 END) as income,
++            SUM(CASE WHEN type = 'expense' THEN amount ELSE 0 END) as expense
++          FROM transactions 
++          WHERE date(date) BETWEEN ? AND ? AND deleted_at IS NULL
++        `).get(monthStart.format('YYYY-MM-DD'), monthEnd.format('YYYY-MM-DD')) as { income: number; expense: number };
++        trend.push({
++          label: monthStart.format('MM月'),
++          income: stat.income || 0,
++          expense: stat.expense || 0
++        });
++      }
++    } else {
++      const days = range.end.diff(range.start, 'day') + 1;
++      const loopDays = Math.min(days, 31);
++      for (let i = 0; i < loopDays; i++) {
++        const dayStart = range.start.add(i, 'day').startOf('day');
++        const dayEnd = dayStart.endOf('day');
++        const stat = db.prepare(`
++          SELECT 
++            SUM(CASE WHEN type = 'income' THEN amount ELSE 0 END) as income,
++            SUM(CASE WHEN type = 'expense' THEN amount ELSE 0 END) as expense
++          FROM transactions 
++          WHERE date(date) BETWEEN ? AND ? AND deleted_at IS NULL
++        `).get(dayStart.format('YYYY-MM-DD'), dayEnd.format('YYYY-MM-DD')) as { income: number; expense: number };
++        trend.push({
++          label: dayStart.format('MM-DD'),
++          income: stat.income || 0,
++          expense: stat.expense || 0
++        });
++      }
+     }
+ 
+-    // 4. Expense Composition (This Month)
++    const incomeComposition = db.prepare(`
++      SELECT c.name, SUM(t.amount) as value
++      FROM transactions t
++      JOIN categories c ON t.category_id = c.id
++      WHERE t.type = 'income' AND date(t.date) BETWEEN ? AND ? AND t.deleted_at IS NULL
++      GROUP BY c.name
++      ORDER BY value DESC
++    `).all(startDate, endDate) as { name: string; value: number }[];
++
+     const expenseComposition = db.prepare(`
+       SELECT c.name, SUM(t.amount) as value
+       FROM transactions t
+       JOIN categories c ON t.category_id = c.id
+-      WHERE t.type = 'expense' AND t.date BETWEEN ? AND ?
++      WHERE t.type = 'expense' AND date(t.date) BETWEEN ? AND ? AND t.deleted_at IS NULL
+       GROUP BY c.name
+       ORDER BY value DESC
+-    `).all(startOfMonth, endOfMonth);
++    `).all(startDate, endDate) as { name: string; value: number }[];
++
++    const incomeItems = db.prepare(`
++      SELECT c.name as category, SUM(t.amount) as amount, COUNT(*) as count
++      FROM transactions t
++      JOIN categories c ON t.category_id = c.id
++      WHERE t.type = 'income' AND date(t.date) BETWEEN ? AND ? AND t.deleted_at IS NULL
++      GROUP BY c.name
++      ORDER BY amount DESC
++    `).all(startDate, endDate) as { category: string; amount: number; count: number }[];
++
++    const expenseItems = db.prepare(`
++      SELECT c.name as category, SUM(t.amount) as amount, COUNT(*) as count
++      FROM transactions t
++      JOIN categories c ON t.category_id = c.id
++      WHERE t.type = 'expense' AND date(t.date) BETWEEN ? AND ? AND t.deleted_at IS NULL
++      GROUP BY c.name
++      ORDER BY amount DESC
++    `).all(startDate, endDate) as { category: string; amount: number; count: number }[];
++
++    const details = db.prepare(`
++      SELECT t.id, t.date, t.type, t.amount, t.description, c.name as category_name
++      FROM transactions t
++      LEFT JOIN categories c ON t.category_id = c.id
++      WHERE date(t.date) BETWEEN ? AND ? AND t.deleted_at IS NULL
++      ORDER BY t.date DESC
++      LIMIT 200
++    `).all(startDate, endDate);
++
++    const income = periodStats.income || 0;
++    const expense = periodStats.expense || 0;
+ 
+     return {
+       totalAssets: totalAssets.total || 0,
+-      monthlyIncome: monthlyStats.income || 0,
+-      monthlyExpense: monthlyStats.expense || 0,
+-      trend: trendData,
+-      composition: expenseComposition
++      periodType: range.periodType,
++      startTime,
++      endTime,
++      totalIncome: income,
++      totalExpense: expense,
++      netIncome: income - expense,
++      trend,
++      incomeComposition,
++      expenseComposition,
++      incomeItems,
++      expenseItems,
++      details
+     };
+   });
++
++  ipcMain.handle('dashboard:save-base64-image', async (event, payload: { base64Data: string; format: 'png' | 'jpg' }) => {
++    const { base64Data, format } = payload;
++    const senderWindow = BrowserWindow.fromWebContents(event.sender);
++    if (!senderWindow) {
++      return { success: false, error: '未找到窗口上下文' };
++    }
++
++    const now = dayjs().format('YYYYMMDD_HHmmss');
++    const defaultPath = join(app.getPath('downloads'), `dashboard_report_${now}.${format}`);
++    const result = await dialog.showSaveDialog(senderWindow, {
++      title: '保存导出图片',
++      defaultPath,
++      filters: format === 'png'
++        ? [{ name: 'PNG 图片', extensions: ['png'] }]
++        : [{ name: 'JPG 图片', extensions: ['jpg', 'jpeg'] }]
++    });
++
++    if (result.canceled || !result.filePath) {
++      return { success: false, canceled: true };
++    }
++
++    try {
++      const cleanBase64 = base64Data.replace(/^data:image\/\w+;base64,/, '');
++      const buffer = Buffer.from(cleanBase64, 'base64');
++      await fs.writeFile(result.filePath, buffer);
++      return { success: true, filePath: result.filePath };
++    } catch (error: any) {
++      console.error('Save base64 image error:', error);
++      return { success: false, error: '保存图片失败' };
++    }
++  });
++
++  ipcMain.handle('dashboard:export-report', async (event, payload) => {
++    const { format, query, chartImages, stats } = payload;
++    const senderWindow = BrowserWindow.fromWebContents(event.sender);
++    if (!senderWindow) return { success: false, error: '未找到窗口上下文' };
++
++    const now = dayjs().format('YYYYMMDD_HHmmss');
++    const ext = format === 'excel' ? 'xlsx' : 'pdf';
++    const defaultPath = join(app.getPath('downloads'), `财务报表_${now}.${ext}`);
++    
++    const result = await dialog.showSaveDialog(senderWindow, {
++      title: `导出 ${format.toUpperCase()} 报表`,
++      defaultPath,
++      filters: format === 'excel' 
++        ? [{ name: 'Excel 文档', extensions: ['xlsx'] }]
++        : [{ name: 'PDF 文档', extensions: ['pdf'] }]
++    });
++
++    if (result.canceled || !result.filePath) {
++      return { success: false, canceled: true };
++    }
++
++    try {
++      // 提取全部明细数据，不受分页限制
++      const range = getPeriodRange(query);
++      const startDate = range.start.format('YYYY-MM-DD');
++      const endDate = range.end.format('YYYY-MM-DD');
++      const details = db.prepare(`
++        SELECT t.id, t.date, t.type, t.amount, t.description, c.name as category_name
++        FROM transactions t
++        LEFT JOIN categories c ON t.category_id = c.id
++        WHERE date(t.date) BETWEEN ? AND ? AND t.deleted_at IS NULL
++        ORDER BY t.date DESC
++      `).all(startDate, endDate) as any[];
++
++      if (format === 'excel') {
++        const workbook = new ExcelJS.Workbook();
++        workbook.creator = 'Studio Financial System';
++        workbook.created = new Date();
++
++        // 1. 概览工作表
++        const summarySheet = workbook.addWorksheet('财务概览');
++        summarySheet.columns = [
++          { header: '指标', key: 'metric', width: 20 },
++          { header: '金额 (¥)', key: 'value', width: 20 }
++        ];
++        
++        summarySheet.addRow({ metric: '总资产', value: stats.totalAssets });
++        summarySheet.addRow({ metric: '总收入', value: stats.totalIncome });
++        summarySheet.addRow({ metric: '总支出', value: stats.totalExpense });
++        summarySheet.addRow({ metric: '净收支', value: stats.netIncome });
++
++        // 样式
++        summarySheet.getRow(1).font = { bold: true };
++        
++        // 插入图表图片
++        let currentRow = 7;
++        const addChart = (base64Data: string, name: string) => {
++          if (!base64Data) return;
++          const cleanBase64 = base64Data.replace(/^data:image\/\w+;base64,/, '');
++          
++          summarySheet.getCell(`A${currentRow}`).value = name;
++          summarySheet.getCell(`A${currentRow}`).font = { bold: true, size: 14 };
++          
++          const imageId = workbook.addImage({
++            base64: cleanBase64,
++            extension: 'png',
++          });
++          summarySheet.addImage(imageId, {
++            tl: { col: 0, row: currentRow },
++            ext: { width: 600, height: 300 }
++          });
++          currentRow += 16; // 留出空间
++        };
++
++        addChart(chartImages.trend, '收支趋势');
++        addChart(chartImages.compare, '收支对比');
++        addChart(chartImages.incomePie, '收入构成');
++        addChart(chartImages.expensePie, '支出构成');
++
++        // 2. 明细工作表
++        const detailsSheet = workbook.addWorksheet('收支明细');
++        detailsSheet.columns = [
++          { header: '日期', key: 'date', width: 15 },
++          { header: '类型', key: 'type', width: 10 },
++          { header: '分类', key: 'category', width: 15 },
++          { header: '金额', key: 'amount', width: 15 },
++          { header: '说明', key: 'description', width: 40 }
++        ];
++
++        detailsSheet.getRow(1).font = { bold: true };
++        detailsSheet.getRow(1).fill = {
++          type: 'pattern',
++          pattern: 'solid',
++          fgColor: { argb: 'FFF0F2F5' }
++        };
++
++        details.forEach(row => {
++          detailsSheet.addRow({
++            date: row.date,
++            type: row.type === 'income' ? '收入' : '支出',
++            category: row.category_name,
++            amount: row.amount,
++            description: row.description
++          });
++        });
++
++        // 金额列格式化
++        detailsSheet.getColumn('amount').numFmt = '¥#,##0.00';
++
++        await workbook.xlsx.writeFile(result.filePath);
++      } else if (format === 'pdf') {
++        // 创建隐藏窗口渲染 PDF
++        const win = new BrowserWindow({
++          show: false,
++          webPreferences: { nodeIntegration: false }
++        });
++
++        const htmlContent = generateReportHtml(startDate, endDate, stats, chartImages, details);
++
++        const tempPath = join(app.getPath('temp'), `report_${now}.html`);
++        await fs.writeFile(tempPath, htmlContent, 'utf-8');
++        await win.loadFile(tempPath);
++        
++        // 等待一下确保图片加载完成
++        await new Promise(resolve => setTimeout(resolve, 500));
++
++        const pdfData = await win.webContents.printToPDF({
++          printBackground: true,
++          pageSize: 'A4'
++        });
++
++        await fs.writeFile(result.filePath, pdfData);
++        // 清理临时文件
++        await fs.remove(tempPath);
++        win.destroy();
++      }
++
++      return { success: true, filePath: result.filePath };
++    } catch (error: any) {
++      console.error('Export error:', error);
++      return { success: false, error: error.message || '导出过程中发生错误', retryable: true };
++    }
++  });
+ }
+diff --git a/src/main/ipc/members.ts b/src/main/ipc/members.ts
+index de4d0cb..2f954fa 100644
+--- a/src/main/ipc/members.ts
++++ b/src/main/ipc/members.ts
+@@ -1,36 +1,653 @@
+-import { ipcMain } from 'electron';
++import { app, dialog, ipcMain } from 'electron';
+ import { v4 as uuidv4 } from 'uuid';
+ import { getDB } from '../database';
++import dayjs from 'dayjs';
++import { extname, join } from 'path';
++import fs from 'fs-extra';
++import { createHash } from 'crypto';
++import { buildFeeReportCsv, FeeCycle, getExpiryDate, getFeeStatus } from './membership-fee-utils';
++import { assertRole, resolveActor, writeAuditLog } from './security';
++
++const allowedProofMime = new Set(['image/jpeg', 'image/png', 'application/pdf']);
++const proofDir = join(app.getPath('userData'), 'secure_receipts');
++const normalizeDateTime = (value: string) => (/^\d{4}-\d{2}-\d{2}$/.test(value || '') ? `${value} 00:00:00` : value);
++
++function decodeBase64File(dataUrl: string) {
++  const match = /^data:(.+);base64,(.*)$/.exec(dataUrl || '');
++  if (!match) {
++    throw new Error('凭证文件格式不正确');
++  }
++  const mimeType = match[1];
++  if (!allowedProofMime.has(mimeType)) {
++    throw new Error('仅支持 JPG、PNG、PDF 凭证');
++  }
++  const buffer = Buffer.from(match[2], 'base64');
++  if (buffer.length === 0) {
++    throw new Error('凭证文件为空');
++  }
++  return { mimeType, buffer };
++}
++
++function getSafeExt(fileName: string, mimeType: string) {
++  const rawExt = (extname(fileName || '').toLowerCase() || '').replace('.', '');
++  if (mimeType === 'image/jpeg') return 'jpg';
++  if (mimeType === 'image/png') return 'png';
++  if (mimeType === 'application/pdf') return 'pdf';
++  if (['jpg', 'jpeg', 'png', 'pdf'].includes(rawExt)) return rawExt === 'jpeg' ? 'jpg' : rawExt;
++  return 'bin';
++}
++
++function enqueueSyncRetry(refId: string, payload: unknown, errorMessage: string) {
++  const db = getDB();
++  db.prepare(`
++    INSERT INTO sync_retry_queue (id, queue_type, ref_id, payload, retry_count, last_error, next_retry_at, status)
++    VALUES (?, 'member_fee_sync', ?, ?, 1, ?, strftime('%s', 'now') + 300, 'pending')
++  `).run(uuidv4(), refId, JSON.stringify(payload), errorMessage);
++}
++
++function processSyncRetryQueue() {
++  const db = getDB();
++  const pending = db.prepare(`
++    SELECT id, ref_id, payload, retry_count
++    FROM sync_retry_queue
++    WHERE queue_type = 'member_fee_sync'
++      AND status = 'pending'
++      AND next_retry_at <= strftime('%s', 'now')
++    ORDER BY created_at ASC
++    LIMIT 20
++  `).all() as { id: string; ref_id: string; payload: string; retry_count: number }[];
++  for (const item of pending) {
++    try {
++      const payload = JSON.parse(item.payload);
++      const fee = db.prepare(`
++        SELECT id, member_id, cycle, amount, payment_date, transaction_id
++        FROM membership_fee_records
++        WHERE id = ?
++      `).get(item.ref_id) as {
++        id: string;
++        member_id: string;
++        cycle: FeeCycle;
++        amount: number;
++        payment_date: string;
++        transaction_id?: string;
++      } | undefined;
++      if (!fee) {
++        db.prepare(`UPDATE sync_retry_queue SET status = 'failed', updated_at = strftime('%s', 'now') WHERE id = ?`).run(item.id);
++        continue;
++      }
++      if (!fee.transaction_id) {
++        const category = db.prepare(`SELECT id FROM categories WHERE type = 'income' AND name = '会员费' LIMIT 1`).get() as { id: number } | undefined;
++        const account = db.prepare(`SELECT id FROM accounts ORDER BY id LIMIT 1`).get() as { id: number } | undefined;
++        const member = db.prepare(`SELECT name FROM members WHERE id = ?`).get(fee.member_id) as { name: string } | undefined;
++        if (!category || !account || !member) {
++          throw new Error('补偿同步失败：缺少分类、账户或会员');
++        }
++        const transactionId = uuidv4();
++        db.prepare(`
++          INSERT INTO transactions (
++            id, date, type, amount, account_id, category_id, description, member_id, created_by,
++            source_type, source_ref_id, version, updated_at
++          )
++          VALUES (?, ?, 'income', ?, ?, ?, ?, ?, 0, 'membership_fee_retry', ?, 1, strftime('%s', 'now'))
++        `).run(
++          transactionId,
++          normalizeDateTime(fee.payment_date),
++          Number(fee.amount),
++          account.id,
++          category.id,
++          `会员缴费补偿同步-${member.name}-${fee.cycle}`,
++          fee.member_id,
++          fee.id
++        );
++        db.prepare(`
++          UPDATE accounts
++          SET balance = balance + ?
++          WHERE id = ?
++        `).run(Number(fee.amount), account.id);
++        db.prepare(`
++          UPDATE membership_fee_records
++          SET transaction_id = ?
++          WHERE id = ?
++        `).run(transactionId, fee.id);
++      }
++      db.prepare(`
++        UPDATE membership_fee_records
++        SET sync_status = 'synced', retry_count = retry_count + 1
++        WHERE id = ?
++      `).run(item.ref_id);
++      db.prepare(`UPDATE sync_retry_queue SET status = 'done', updated_at = strftime('%s', 'now') WHERE id = ?`).run(item.id);
++      void payload;
++    } catch (error: any) {
++      const nextRetry = item.retry_count >= 5 ? null : Math.floor(Date.now() / 1000) + item.retry_count * 600;
++      db.prepare(`
++        UPDATE sync_retry_queue
++        SET retry_count = retry_count + 1,
++            last_error = ?,
++            next_retry_at = ?,
++            status = ?
++        WHERE id = ?
++      `).run(error.message, nextRetry, nextRetry ? 'pending' : 'failed', item.id);
++    }
++  }
++}
++
++function syncMemberPrivileges() {
++  const db = getDB();
++  const members = db.prepare('SELECT id, status, auto_frozen FROM members').all() as { id: string; status: string; auto_frozen: number }[];
++  const latestFees = db.prepare(`
++    SELECT fr.member_id, fr.expiry_date
++    FROM membership_fee_records fr
++    JOIN (
++      SELECT member_id, MAX(expiry_date) as max_expiry
++      FROM membership_fee_records
++      WHERE status = 'paid'
++      GROUP BY member_id
++    ) latest
++    ON fr.member_id = latest.member_id AND fr.expiry_date = latest.max_expiry AND fr.status = 'paid'
++  `).all() as { member_id: string; expiry_date: string }[];
++  const latestMap = new Map(latestFees.map(item => [item.member_id, item.expiry_date]));
++  const freezeStmt = db.prepare(`UPDATE members SET status = 'suspended', auto_frozen = 1 WHERE id = ?`);
++  const unfreezeStmt = db.prepare(`UPDATE members SET status = 'active', auto_frozen = 0 WHERE id = ?`);
++
++  for (const member of members) {
++    const expiryDate = latestMap.get(member.id) || null;
++    const { status } = getFeeStatus(expiryDate);
++    if (status === 'overdue' && member.status !== 'suspended') {
++      freezeStmt.run(member.id);
++      continue;
++    }
++    if (status !== 'overdue' && member.auto_frozen === 1) {
++      unfreezeStmt.run(member.id);
++    }
++  }
++}
++
++function getMembersWithFeeOverview() {
++  const db = getDB();
++  syncMemberPrivileges();
++
++  const members = db.prepare('SELECT * FROM members ORDER BY created_at DESC').all() as any[];
++  const latestFees = db.prepare(`
++    SELECT fr.member_id, fr.cycle, fr.amount, fr.payment_date, fr.expiry_date, fr.status
++    FROM membership_fee_records fr
++    JOIN (
++      SELECT member_id, MAX(expiry_date) as max_expiry
++      FROM membership_fee_records
++      WHERE status = 'paid'
++      GROUP BY member_id
++    ) latest
++    ON fr.member_id = latest.member_id AND fr.expiry_date = latest.max_expiry
++  `).all() as any[];
++
++  const historyStat = db.prepare(`
++    SELECT member_id, COUNT(*) as history_count, SUM(amount) as total_paid
++    FROM membership_fee_records
++    GROUP BY member_id
++  `).all() as { member_id: string; history_count: number; total_paid: number }[];
++
++  const latestMap = new Map(latestFees.map(item => [item.member_id, item]));
++  const statMap = new Map(historyStat.map(item => [item.member_id, item]));
++
++  return members.map(member => {
++    const latestFee = latestMap.get(member.id);
++    const stat = statMap.get(member.id);
++    const feeState = getFeeStatus(latestFee?.expiry_date || null);
++    return {
++      ...member,
++      fee_status: feeState.status,
++      remaining_days: feeState.remainingDays,
++      due_reminder: feeState.dueReminder,
++      last_payment_date: latestFee?.payment_date || '',
++      expiry_date: latestFee?.expiry_date || '',
++      fee_cycle: latestFee?.cycle || '',
++      fee_amount: latestFee?.amount || 0,
++      fee_record_status: latestFee?.status || '',
++      fee_history_count: stat?.history_count || 0,
++      total_paid: stat?.total_paid || 0
++    };
++  });
++}
+ 
+ export function registerMemberHandlers() {
+   const db = getDB();
++  fs.ensureDirSync(proofDir);
+ 
+   ipcMain.handle('member:list', async () => {
+-    return db.prepare('SELECT * FROM members ORDER BY created_at DESC').all();
++    return getMembersWithFeeOverview();
+   });
+ 
+   ipcMain.handle('member:create', async (_, data) => {
++    const actor = resolveActor(data);
++    assertRole(actor.role, ['admin', 'finance']);
+     const id = uuidv4();
+     const stmt = db.prepare(`
+-      INSERT INTO members (id, name, contact_info, join_date, status, notes)
+-      VALUES (?, ?, ?, ?, ?, ?)
++      INSERT INTO members (id, name, contact_info, join_date, status, member_type, auto_frozen, notes)
++      VALUES (?, ?, ?, ?, ?, ?, 0, ?)
+     `);
+-    stmt.run(id, data.name, JSON.stringify(data.contact_info), data.join_date, data.status, data.notes);
++    stmt.run(
++      id,
++      data.name,
++      JSON.stringify(data.contact_info),
++      data.join_date,
++      data.status,
++      data.member_type || 'standard',
++      data.notes
++    );
++    writeAuditLog(db, {
++      module: 'member',
++      action: 'create',
++      targetId: id,
++      afterData: { ...data, id },
++      actor
++    });
+     return { id };
+   });
+ 
+-  ipcMain.handle('member:update', async (_, { id, ...data }) => {
++  ipcMain.handle('member:update', async (_, payload) => {
++    const actor = resolveActor(payload);
++    assertRole(actor.role, ['admin', 'finance']);
++    const { id, ...data } = payload;
++    const before = db.prepare('SELECT * FROM members WHERE id = ?').get(id);
+     const stmt = db.prepare(`
+       UPDATE members 
+-      SET name = ?, contact_info = ?, join_date = ?, status = ?, notes = ?
++      SET name = ?, contact_info = ?, join_date = ?, status = ?, member_type = ?, notes = ?
+       WHERE id = ?
+     `);
+-    stmt.run(data.name, JSON.stringify(data.contact_info), data.join_date, data.status, data.notes, id);
++    stmt.run(
++      data.name,
++      JSON.stringify(data.contact_info),
++      data.join_date,
++      data.status,
++      data.member_type || 'standard',
++      data.notes,
++      id
++    );
++    writeAuditLog(db, {
++      module: 'member',
++      action: 'update',
++      targetId: id,
++      beforeData: before,
++      afterData: data,
++      actor
++    });
++    return { success: true };
++  });
++
++  ipcMain.handle('member:delete', async (_, data) => {
++    const actor = resolveActor(data);
++    assertRole(actor.role, ['admin']);
++    const id = typeof data === 'string' ? data : data?.id;
++    const before = db.prepare('SELECT * FROM members WHERE id = ?').get(id);
++
++    const execute = db.transaction(() => {
++      // 1. Delete associated fee records first to avoid foreign key constraints
++      db.prepare('DELETE FROM membership_fee_records WHERE member_id = ?').run(id);
++      
++      // 2. Clear member references from transactions and files (soft detach)
++      db.prepare('UPDATE transactions SET member_id = NULL WHERE member_id = ?').run(id);
++      db.prepare('UPDATE file_attachments SET member_id = NULL WHERE member_id = ?').run(id);
++      
++      // 3. Delete the member
++      db.prepare('DELETE FROM members WHERE id = ?').run(id);
++      
++      // 4. Log the deletion
++      writeAuditLog(db, {
++        module: 'member',
++        action: 'delete',
++        targetId: id,
++        beforeData: before,
++        actor
++      });
++    });
++
++    execute();
++    syncMemberPrivileges();
++    
++    return { success: true };
++  });
++
++  ipcMain.handle('member:fee:create', async (_, data) => {
++    const actor = resolveActor(data);
++    assertRole(actor.role, ['admin', 'finance']);
++    const id = uuidv4();
++    const cycle = data.cycle as FeeCycle;
++    const paymentDate = data.payment_date || dayjs().format('YYYY-MM-DD');
++    const expiryDate = getExpiryDate(paymentDate, cycle);
++    const amount = Number(data.amount || 0);
++    if (!data.member_id || amount <= 0) {
++      throw new Error('缴费信息不完整');
++    }
++
++    const category = db.prepare(`
++      SELECT id FROM categories WHERE type = 'income' AND name = '会员费' LIMIT 1
++    `).get() as { id: number } | undefined;
++    const account = db.prepare(`
++      SELECT id FROM accounts ORDER BY id LIMIT 1
++    `).get() as { id: number } | undefined;
++    if (!category || !account) {
++      throw new Error('缺少默认分类或账户，无法同步收支记录');
++    }
++
++    const member = db.prepare(`SELECT id, name FROM members WHERE id = ?`).get(data.member_id) as { id: string; name: string } | undefined;
++    if (!member) {
++      throw new Error('会员不存在');
++    }
++
++    const transactionId = uuidv4();
++    const createFeeWithTransaction = db.transaction(() => {
++      db.prepare(`
++        INSERT INTO transactions (
++          id, date, type, amount, account_id, category_id, description, member_id, created_by,
++          source_type, source_ref_id, version, updated_at
++        )
++        VALUES (?, ?, 'income', ?, ?, ?, ?, ?, ?, 'membership_fee', ?, 1, strftime('%s', 'now'))
++      `).run(
++        transactionId,
++        normalizeDateTime(paymentDate),
++        amount,
++        account.id,
++        category.id,
++        `会员缴费-${member.name}-${cycle}`,
++        member.id,
++        Number(actor.id) || 0,
++        id
++      );
++      db.prepare(`
++        UPDATE accounts
++        SET balance = balance + ?
++        WHERE id = ?
++      `).run(amount, account.id);
++      db.prepare(`
++        INSERT INTO membership_fee_records (
++          id, member_id, cycle, amount, payment_date, expiry_date, status, transaction_id, sync_status, retry_count, version
++        )
++        VALUES (?, ?, ?, ?, ?, ?, 'paid', ?, 'synced', 0, 1)
++      `).run(id, data.member_id, cycle, amount, paymentDate, expiryDate, transactionId);
++      writeAuditLog(db, {
++        module: 'membership_fee',
++        action: 'create_and_sync',
++        targetId: id,
++        afterData: {
++          fee_id: id,
++          member_name: member.name,
++          member_id: member.id,
++          amount,
++          cycle,
++          payment_date: paymentDate,
++          transaction_id: transactionId
++        },
++        actor
++      });
++    });
++
++    try {
++      createFeeWithTransaction();
++    } catch (error: any) {
++      db.prepare(`
++        INSERT INTO membership_fee_records (
++          id, member_id, cycle, amount, payment_date, expiry_date, status, sync_status, retry_count, version
++        )
++        VALUES (?, ?, ?, ?, ?, ?, 'paid', 'pending', 1, 1)
++      `).run(id, data.member_id, cycle, amount, paymentDate, expiryDate);
++      enqueueSyncRetry(id, data, error.message);
++      writeAuditLog(db, {
++        module: 'membership_fee',
++        action: 'sync_failed',
++        targetId: id,
++        afterData: { error: error.message, payload: data },
++        actor
++      });
++    }
++
++    syncMemberPrivileges();
++    processSyncRetryQueue();
++    return { success: true, id, expiry_date: expiryDate };
++  });
++
++  ipcMain.handle('member:fee:history', async (_, memberId: string) => {
++    return db.prepare(`
++      SELECT id, member_id, cycle, amount, payment_date, expiry_date, status, transaction_id, proof_file_id, sync_status, created_at
++      FROM membership_fee_records
++      WHERE member_id = ?
++      ORDER BY payment_date DESC
++    `).all(memberId);
++  });
++
++  ipcMain.handle('member:fee:revoke', async (_, data) => {
++    const actor = resolveActor(data);
++    assertRole(actor.role, ['admin', 'finance']);
++    const { id, reason } = data;
++
++    if (!id || !reason) {
++      throw new Error('缺少撤销凭证或原因');
++    }
++
++    const feeRecord = db.prepare(`
++      SELECT * FROM membership_fee_records WHERE id = ?
++    `).get(id) as any;
++
++    if (!feeRecord) {
++      throw new Error('缴费记录不存在');
++    }
++
++    if (feeRecord.status === 'revoked') {
++      throw new Error('该缴费记录已被撤销，请勿重复操作');
++    }
++
++    const execute = db.transaction(() => {
++      // 1. Mark fee as revoked
++      db.prepare(`
++        UPDATE membership_fee_records
++        SET status = 'revoked', version = version + 1
++        WHERE id = ?
++      `).run(id);
++
++      // 2. Rollback transaction if exists
++      if (feeRecord.transaction_id) {
++        const transaction = db.prepare('SELECT * FROM transactions WHERE id = ? AND deleted_at IS NULL').get(feeRecord.transaction_id) as any;
++        if (transaction) {
++          const rollbackBalance = transaction.type === 'income' ? -Number(transaction.amount) : Number(transaction.amount);
++          db.prepare(`
++            UPDATE accounts
++            SET balance = balance + ?
++            WHERE id = ?
++          `).run(rollbackBalance, transaction.account_id);
++
++          db.prepare(`
++            UPDATE transactions
++            SET deleted_at = strftime('%s', 'now'), updated_at = strftime('%s', 'now')
++            WHERE id = ?
++          `).run(feeRecord.transaction_id);
++          
++          writeAuditLog(db, {
++            module: 'transaction',
++            action: 'delete',
++            targetId: feeRecord.transaction_id,
++            beforeData: transaction,
++            actor
++          });
++        }
++      }
++
++      // 3. Audit log for revocation
++      writeAuditLog(db, {
++        module: 'membership_fee',
++        action: 'revoke',
++        targetId: id,
++        beforeData: feeRecord,
++        afterData: { reason },
++        actor
++      });
++    });
++
++    execute();
++    syncMemberPrivileges();
++    
+     return { success: true };
+   });
+ 
+-  ipcMain.handle('member:delete', async (_, id) => {
+-    db.prepare('DELETE FROM members WHERE id = ?').run(id);
++  ipcMain.handle('member:fee:proof:upload', async (_, data) => {
++    const actor = resolveActor(data);
++    assertRole(actor.role, ['admin', 'finance']);
++    const { fee_record_id, member_id, file_name, base64_data, watermark_text } = data;
++    if (!fee_record_id || !member_id || !file_name || !base64_data) {
++      throw new Error('凭证参数缺失');
++    }
++    const feeRecord = db.prepare(`
++      SELECT id, transaction_id FROM membership_fee_records WHERE id = ? AND member_id = ?
++    `).get(fee_record_id, member_id) as { id: string; transaction_id: string } | undefined;
++    if (!feeRecord) {
++      throw new Error('缴费记录不存在');
++    }
++
++    const { mimeType, buffer } = decodeBase64File(base64_data);
++    const ext = getSafeExt(file_name, mimeType);
++    const safeName = `${uuidv4()}.${ext}`;
++    const filePath = join(proofDir, safeName);
++    await fs.writeFile(filePath, buffer);
++    await fs.chmod(filePath, 0o600);
++    const hash = createHash('sha256').update(buffer).digest('hex');
++    const fileId = uuidv4();
++    db.prepare(`
++      INSERT INTO file_attachments (
++        id, owner_type, owner_id, member_id, transaction_id, file_name, file_path,
++        file_type, file_size, file_hash, watermark_text, created_by
++      )
++      VALUES (?, 'membership_fee', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
++    `).run(
++      fileId,
++      fee_record_id,
++      member_id,
++      feeRecord.transaction_id || null,
++      file_name,
++      filePath,
++      mimeType,
++      buffer.byteLength,
++      hash,
++      watermark_text || '财务凭证-仅限内部使用',
++      actor.name
++    );
++    db.prepare(`
++      UPDATE membership_fee_records
++      SET proof_file_id = ?, version = version + 1
++      WHERE id = ?
++    `).run(fileId, fee_record_id);
++    writeAuditLog(db, {
++      module: 'membership_fee_proof',
++      action: 'upload',
++      targetId: fileId,
++      afterData: { fee_record_id, file_name, mimeType, size: buffer.byteLength },
++      actor
++    });
++    return { success: true, file_id: fileId };
++  });
++
++  ipcMain.handle('member:fee:proof:list', async (_, feeRecordId: string) => {
++    return db.prepare(`
++      SELECT id, file_name, file_type, file_size, created_at
++      FROM file_attachments
++      WHERE owner_type = 'membership_fee' AND owner_id = ? AND is_deleted = 0
++      ORDER BY created_at DESC
++    `).all(feeRecordId);
++  });
++
++  ipcMain.handle('member:fee:proof:download', async (_, fileId: string) => {
++    const row = db.prepare(`
++      SELECT id, file_name, file_path, file_type
++      FROM file_attachments
++      WHERE id = ? AND is_deleted = 0
++    `).get(fileId) as { id: string; file_name: string; file_path: string; file_type: string } | undefined;
++    if (!row || !(await fs.pathExists(row.file_path))) {
++      throw new Error('凭证文件不存在');
++    }
++    const content = await fs.readFile(row.file_path);
++    return {
++      id: row.id,
++      file_name: row.file_name,
++      file_type: row.file_type,
++      base64_data: `data:${row.file_type};base64,${content.toString('base64')}`
++    };
++  });
++
++  ipcMain.handle('member:fee:proof:delete', async (_, data) => {
++    const actor = resolveActor(data);
++    assertRole(actor.role, ['admin', 'finance']);
++    const { file_id } = data;
++    const row = db.prepare(`
++      SELECT id, file_path
++      FROM file_attachments
++      WHERE id = ? AND is_deleted = 0
++    `).get(file_id) as { id: string; file_path: string } | undefined;
++    if (!row) {
++      throw new Error('凭证不存在');
++    }
++    db.prepare(`
++      UPDATE file_attachments
++      SET is_deleted = 1, deleted_at = strftime('%s', 'now')
++      WHERE id = ?
++    `).run(file_id);
++    if (await fs.pathExists(row.file_path)) {
++      await fs.remove(row.file_path);
++    }
++    writeAuditLog(db, {
++      module: 'membership_fee_proof',
++      action: 'delete',
++      targetId: file_id,
++      actor
++    });
+     return { success: true };
+   });
++
++  ipcMain.handle('member:fee:reminders', async () => {
++    const members = getMembersWithFeeOverview();
++    return members
++      .filter(item => item.fee_status !== 'overdue' && item.due_reminder)
++      .map(item => ({
++        member_id: item.id,
++        member_name: item.name,
++        remaining_days: item.remaining_days,
++        expiry_date: item.expiry_date
++      }));
++  });
++
++  ipcMain.handle('member:fee:report:export', async (_, data: {
++    startDate: string;
++    endDate: string;
++    memberType?: string;
++  }) => {
++    const startDate = dayjs(data.startDate).startOf('day').format('YYYY-MM-DD HH:mm:ss');
++    const endDate = dayjs(data.endDate).endOf('day').format('YYYY-MM-DD HH:mm:ss');
++    const memberType = data.memberType || 'all';
++    let query = `
++      SELECT m.name as member_name, m.member_type, r.cycle, r.amount, r.payment_date, r.expiry_date, r.status
++      FROM membership_fee_records r
++      JOIN members m ON r.member_id = m.id
++      WHERE r.payment_date BETWEEN ? AND ?
++    `;
++    const params: any[] = [startDate, endDate];
++    if (memberType !== 'all') {
++      query += ` AND m.member_type = ?`;
++      params.push(memberType);
++    }
++    query += ` ORDER BY r.payment_date DESC`;
++    const rows = db.prepare(query).all(...params) as any[];
++    const content = buildFeeReportCsv(rows);
++
++    const now = dayjs().format('YYYYMMDD_HHmmss');
++    const defaultPath = join(app.getPath('downloads'), `membership_fee_report_${now}.csv`);
++    const saveResult = await dialog.showSaveDialog({
++      title: '导出会费统计报表',
++      defaultPath,
++      filters: [{ name: 'CSV 文件', extensions: ['csv'] }]
++    });
++    if (saveResult.canceled || !saveResult.filePath) {
++      return { success: false, canceled: true };
++    }
++    await fs.writeFile(saveResult.filePath, content, 'utf-8');
++    return {
++      success: true,
++      filePath: saveResult.filePath,
++      count: rows.length
++    };
++  });
+ }
+diff --git a/src/main/ipc/transactions.ts b/src/main/ipc/transactions.ts
+index eab596e..11a9970 100644
+--- a/src/main/ipc/transactions.ts
++++ b/src/main/ipc/transactions.ts
+@@ -1,51 +1,207 @@
+ import { ipcMain } from 'electron';
+ import { v4 as uuidv4 } from 'uuid';
+ import { getDB } from '../database';
++import { assertRole, resolveActor, writeAuditLog } from './security';
++
++const normalizeDateTime = (value: string) => {
++  if (/^\d{4}-\d{2}-\d{2}$/.test(value || '')) {
++    return `${value} 00:00:00`;
++  }
++  return value;
++};
+ 
+ export function registerTransactionHandlers() {
+   const db = getDB();
++  const balanceUpdate = db.prepare(`
++    UPDATE accounts
++    SET balance = balance + ?
++    WHERE id = ?
++  `);
+ 
+   ipcMain.handle('transaction:list', async (_, { start_date, end_date }) => {
+-    let query = 'SELECT t.*, c.name as category_name, a.name as account_name FROM transactions t LEFT JOIN categories c ON t.category_id = c.id LEFT JOIN accounts a ON t.account_id = a.id';
++    let query = `
++      SELECT
++        t.*,
++        c.name as category_name,
++        a.name as account_name,
++        m.name as member_name,
++        (SELECT COUNT(*) FROM file_attachments f WHERE f.transaction_id = t.id AND f.is_deleted = 0) as proof_count
++      FROM transactions t
++      LEFT JOIN categories c ON t.category_id = c.id
++      LEFT JOIN accounts a ON t.account_id = a.id
++      LEFT JOIN members m ON t.member_id = m.id
++      WHERE t.deleted_at IS NULL
++    `;
+     const params: any[] = [];
+-    
++
+     if (start_date && end_date) {
+-      query += ' WHERE t.date BETWEEN ? AND ?';
++      query += ' AND t.date BETWEEN ? AND ?';
+       params.push(start_date, end_date);
+     }
+-    
++
+     query += ' ORDER BY t.date DESC';
+     return db.prepare(query).all(...params);
+   });
+ 
+   ipcMain.handle('transaction:create', async (_, data) => {
++    const actor = resolveActor(data);
++    assertRole(actor.role, ['admin', 'finance']);
+     const id = uuidv4();
+-    const { date, type, amount, account_id, category_id, description, member_id, created_by } = data;
+-    
++    const { date, type, amount, account_id, category_id, description, member_id } = data;
++    const normalizedDate = normalizeDateTime(date);
++    const normalizedAmount = Number(amount || 0);
++    if (normalizedAmount <= 0) {
++      throw new Error('金额必须大于 0');
++    }
++
++    const duplicate = db.prepare(`
++      SELECT id FROM transactions
++      WHERE date = ? AND type = ? AND amount = ? AND account_id = ? AND category_id = ?
++        AND IFNULL(description, '') = IFNULL(?, '')
++        AND IFNULL(member_id, '') = IFNULL(?, '')
++        AND deleted_at IS NULL
++      LIMIT 1
++    `).get(normalizedDate, type, normalizedAmount, account_id, category_id, description || '', member_id || '');
++    if (duplicate) {
++      throw new Error('检测到疑似重复账单，请核对后再提交');
++    }
++
+     const stmt = db.prepare(`
+-      INSERT INTO transactions (id, date, type, amount, account_id, category_id, description, member_id, created_by)
+-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
++      INSERT INTO transactions (
++        id, date, type, amount, account_id, category_id, description, member_id, created_by,
++        source_type, source_ref_id, version, updated_at
++      )
++      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, strftime('%s', 'now'))
+     `);
+-    
+-    // Wrap in transaction for balance update
++
+     const execute = db.transaction(() => {
+-      stmt.run(id, date, type, amount, account_id, category_id, description, member_id, created_by);
+-      
+-      // Update account balance
+-      const balanceUpdate = db.prepare(`
+-        UPDATE accounts 
+-        SET balance = balance + ? 
+-        WHERE id = ?
+-      `);
+-      
+-      const balanceChange = type === 'income' ? amount : -amount;
++      stmt.run(
++        id,
++        normalizedDate,
++        type,
++        normalizedAmount,
++        account_id,
++        category_id,
++        description || '',
++        member_id || null,
++        Number(actor.id) || 0,
++        data.source_type || 'manual',
++        data.source_ref_id || null
++      );
++      const balanceChange = type === 'income' ? normalizedAmount : -normalizedAmount;
+       balanceUpdate.run(balanceChange, account_id);
++      writeAuditLog(db, {
++        module: 'transaction',
++        action: 'create',
++        targetId: id,
++        afterData: { id, date, type, amount: normalizedAmount, account_id, category_id, description, member_id },
++        actor
++      });
+     });
+-    
++
+     execute();
+     return { id };
+   });
+ 
++  ipcMain.handle('transaction:update', async (_, data) => {
++    const actor = resolveActor(data);
++    assertRole(actor.role, ['admin', 'finance']);
++    const { id, patch } = data;
++    const before = db.prepare('SELECT * FROM transactions WHERE id = ? AND deleted_at IS NULL').get(id) as any;
++    if (!before) {
++      throw new Error('账单不存在或已删除');
++    }
++    const next = {
++      ...before,
++      ...patch
++    };
++    next.date = normalizeDateTime(next.date);
++    if (Number(next.amount) <= 0) {
++      throw new Error('金额必须大于 0');
++    }
++
++    const execute = db.transaction(() => {
++      if (before.account_id && before.type) {
++        const beforeBalance = before.type === 'income' ? -Number(before.amount) : Number(before.amount);
++        balanceUpdate.run(beforeBalance, before.account_id);
++      }
++      const nextBalance = next.type === 'income' ? Number(next.amount) : -Number(next.amount);
++      balanceUpdate.run(nextBalance, next.account_id);
++      db.prepare(`
++        UPDATE transactions
++        SET date = ?, type = ?, amount = ?, account_id = ?, category_id = ?, description = ?,
++            member_id = ?, version = version + 1, updated_at = strftime('%s', 'now')
++        WHERE id = ?
++      `).run(
++        next.date,
++        next.type,
++        Number(next.amount),
++        next.account_id,
++        next.category_id,
++        next.description || '',
++        next.member_id || null,
++        id
++      );
++      writeAuditLog(db, {
++        module: 'transaction',
++        action: 'update',
++        targetId: id,
++        beforeData: before,
++        afterData: next,
++        actor
++      });
++    });
++    execute();
++    return { success: true };
++  });
++
++  ipcMain.handle('transaction:delete', async (_, data) => {
++    const actor = resolveActor(data);
++    assertRole(actor.role, ['admin', 'finance']);
++    const { id } = data;
++    const before = db.prepare('SELECT * FROM transactions WHERE id = ? AND deleted_at IS NULL').get(id) as any;
++    if (!before) {
++      throw new Error('账单不存在或已删除');
++    }
++
++    const execute = db.transaction(() => {
++      const rollbackBalance = before.type === 'income' ? -Number(before.amount) : Number(before.amount);
++      balanceUpdate.run(rollbackBalance, before.account_id);
++      db.prepare(`
++        UPDATE transactions
++        SET deleted_at = strftime('%s', 'now'), updated_at = strftime('%s', 'now')
++        WHERE id = ?
++      `).run(id);
++
++      if ((before.source_type === 'membership_fee' || before.source_type === 'membership_fee_retry') && before.source_ref_id) {
++        db.prepare(`
++          UPDATE membership_fee_records
++          SET status = 'revoked', version = version + 1
++          WHERE id = ? AND status = 'paid'
++        `).run(before.source_ref_id);
++      }
++
++      writeAuditLog(db, {
++        module: 'transaction',
++        action: 'delete',
++        targetId: id,
++        beforeData: before,
++        actor
++      });
++    });
++    execute();
++    return { success: true };
++  });
++
++  ipcMain.handle('transaction:proof:list', async (_, transactionId: string) => {
++    return db.prepare(`
++      SELECT id, file_name, file_type, file_size, created_at
++      FROM file_attachments
++      WHERE transaction_id = ? AND is_deleted = 0
++      ORDER BY created_at DESC
++    `).all(transactionId);
++  });
++
+   ipcMain.handle('category:list', async () => {
+     return db.prepare('SELECT * FROM categories ORDER BY id').all();
+   });

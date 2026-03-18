@@ -1,6 +1,7 @@
 import { ipcMain, shell, dialog } from 'electron';
 import fs from 'fs-extra';
-import { getCurrentDbPath, closeDB, initDB } from '../database';
+import { getCurrentDbPath, closeDB, initDB, performDatabaseBackup } from '../database';
+import { getDB } from '../database';
 import store from '../store';
 
 export function registerSystemHandlers() {
@@ -68,5 +69,29 @@ export function registerSystemHandlers() {
       initDB(); 
       return { success: false, error: error.message };
     }
+  });
+
+  ipcMain.handle('system:backup:run', async () => {
+    return performDatabaseBackup();
+  });
+
+  ipcMain.handle('system:audit:list', async (_, params: { module?: string; limit?: number }) => {
+    const db = getDB();
+    const limit = Math.max(1, Math.min(params?.limit || 100, 500));
+    if (params?.module) {
+      return db.prepare(`
+        SELECT id, module, action, target_id, operator_name, operator_role, ip_address, created_at
+        FROM audit_logs
+        WHERE module = ?
+        ORDER BY created_at DESC
+        LIMIT ?
+      `).all(params.module, limit);
+    }
+    return db.prepare(`
+      SELECT id, module, action, target_id, operator_name, operator_role, ip_address, created_at
+      FROM audit_logs
+      ORDER BY created_at DESC
+      LIMIT ?
+    `).all(limit);
   });
 }

@@ -20,5 +20,12 @@
   "linux": {
     "target": ["AppImage"],
     "artifactName": "${productName}-${version}-linux-${arch}.${ext}"
-  }
+  },
+  "publish": [
+    {
+      "provider": "github",
+      "owner": "XHTimmo",
+      "repo": "FMS"
+    }
+  ]
 }

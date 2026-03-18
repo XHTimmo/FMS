@@ -8,7 +8,9 @@
   "scripts": {
     "dev": "vite",
     "build": "vue-tsc --noEmit && vite build && electron-builder",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "typecheck": "vue-tsc --noEmit",
+    "test": "tsx --test tests/**/*.test.ts"
   },
   "dependencies": {
     "@element-plus/icons-vue": "^2.3.2",
@@ -20,7 +22,9 @@
     "electron-store": "^8.2.0",
     "electron-updater": "^6.8.3",
     "element-plus": "^2.9.5",
+    "exceljs": "^4.4.0",
     "fs-extra": "^11.3.0",
+    "html2canvas": "^1.4.1",
     "pinia": "^2.3.1",
     "uuid": "^11.1.0",
     "vue": "^3.5.13",
@@ -37,6 +41,7 @@
     "electron": "^34.2.0",
     "electron-builder": "^25.1.8",
     "sass": "^1.85.1",
+    "tsx": "^4.20.3",
     "typescript": "^5.7.3",
     "vite": "^6.2.0",
     "vite-plugin-electron": "^0.29.0",
