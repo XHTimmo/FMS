@@ -25,7 +25,8 @@
     {
       "provider": "github",
       "owner": "XHTimmo",
-      "repo": "FMS"
+      "repo": "FMS",
+      "releaseType": "release"
     }
   ]
 }
