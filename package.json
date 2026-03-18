@@ -7,7 +7,7 @@
   "main": "dist-electron/main/index.js",
   "scripts": {
     "dev": "vite",
-    "build": "vue-tsc --noEmit && vite build && USE_HARD_LINKS=false electron-builder",
+    "build": "vue-tsc --noEmit && vite build && cross-env USE_HARD_LINKS=false electron-builder",
     "preview": "vite preview",
     "typecheck": "vue-tsc --noEmit",
     "test": "node scripts/run-tests.js"
@@ -38,6 +38,7 @@
     "@types/node": "^22.13.5",
     "@types/uuid": "^10.0.0",
     "@vitejs/plugin-vue": "^5.2.1",
+    "cross-env": "^10.1.0",
     "electron": "^34.2.0",
     "electron-builder": "^25.1.8",
     "sass": "^1.85.1",
