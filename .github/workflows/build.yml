@@ -11,8 +11,9 @@ jobs:
       contents: write
     runs-on: ${{ matrix.os }}
     strategy:
+      fail-fast: false
       matrix:
-        os: [macos-latest, windows-latest]
+        os: [macos-13, windows-latest]
 
     steps:
       - name: Check out Git repository
@@ -28,10 +29,11 @@ jobs:
         run: npm install
 
       - name: Run Tests
+        shell: bash
         run: npm run test
 
       - name: Build & Release (macOS)
-        if: matrix.os == 'macos-latest'
+        if: matrix.os == 'macos-13'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: npm run build -- --publish always
