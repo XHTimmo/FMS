@@ -6,10 +6,12 @@ import { registerMemberHandlers } from './ipc/members';
 import { registerTransactionHandlers } from './ipc/transactions';
 import { registerDashboardHandlers } from './ipc/dashboard';
 import { registerSystemHandlers } from './ipc/system';
+import { setupAutoUpdater } from './updater';
 
 log.initialize();
 
 let mainWindow: BrowserWindow | null = null;
+const shouldOpenStartupDevTools = process.env.ENABLE_STARTUP_DEVTOOLS === 'true';
 
 function createWindow() {
   mainWindow = new BrowserWindow({
@@ -24,10 +26,15 @@ function createWindow() {
 
   if (process.env.VITE_DEV_SERVER_URL) {
     mainWindow.loadURL(process.env.VITE_DEV_SERVER_URL);
-    mainWindow.webContents.openDevTools();
+    if (shouldOpenStartupDevTools) {
+      mainWindow.webContents.openDevTools();
+    }
   } else {
-    mainWindow.loadFile(join(__dirname, '../../dist/index.html'));
+    mainWindow.loadFile(join(__dirname, '../dist/index.html'));
   }
+
+  // Setup auto updater
+  setupAutoUpdater(mainWindow);
 
   mainWindow.on('closed', () => {
     mainWindow = null;
