@@ -20,6 +20,13 @@
     "target": ["nsis"],
     "artifactName": "${productName}-${version}-win-${arch}.${ext}"
   },
+  "nsis": {
+    "oneClick": false,
+    "allowToChangeInstallationDirectory": true,
+    "createDesktopShortcut": true,
+    "createStartMenuShortcut": true,
+    "shortcutName": "StudioFinancialSystem"
+  },
   "linux": {
     "target": ["AppImage"],
     "artifactName": "${productName}-${version}-linux-${arch}.${ext}"

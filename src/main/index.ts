@@ -61,7 +61,7 @@ function createWindow() {
       mainWindow.webContents.openDevTools();
     }
   } else {
-    mainWindow.loadFile(join(__dirname, '../dist/index.html'));
+    mainWindow.loadFile(join(__dirname, '../../dist/index.html'));
   }
 
   // Setup auto updater
